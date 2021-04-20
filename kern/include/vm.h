@@ -58,5 +58,6 @@ void free_kpages(vaddr_t addr);
 /* TLB shootdown handling called from interprocessor_interrupt */
 void vm_tlbshootdown(const struct tlbshootdown *);
 
+int vm_fault2(int faulttype, vaddr_t faultaddress);
 
 #endif /* _VM_H_ */

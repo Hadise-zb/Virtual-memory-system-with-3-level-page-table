@@ -48,6 +48,18 @@ struct vnode;
  * You write this.
  */
 
+struct page_table {
+  int table[1024];
+ };
+
+struct region {
+    struct region *next;
+    uint32_t flags;
+    size_t npages;
+    vaddr_t region_base;
+    uint32_t prev_flags;
+};
+
 struct addrspace {
 #if OPT_DUMBVM
         vaddr_t as_vbase1;
@@ -59,6 +71,12 @@ struct addrspace {
         paddr_t as_stackpbase;
 #else
         /* Put stuff here for your VM system */
+        // level 2 PT
+        paddr_t ***pagetable;
+        
+        //vaddr_t as_stack;
+        // new regions
+        struct region *regions;
 #endif
 };
 
@@ -104,7 +122,7 @@ struct addrspace {
  */
 
 struct addrspace *as_create(void);
-int               as_copy(struct addrspace *src, struct addrspace **ret);
+int               as_copy(struct addrspace *old, struct addrspace **ret);
 void              as_activate(void);
 void              as_deactivate(void);
 void              as_destroy(struct addrspace *);
@@ -118,7 +136,10 @@ int               as_prepare_load(struct addrspace *as);
 int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 
-
+int TLB_f(int spl);
+int PTE_copy(struct addrspace *old, struct addrspace *newas);
+struct region *get_region(struct addrspace *as, vaddr_t vaddr);
+vaddr_t alloc_frame(struct addrspace *as, vaddr_t vaddr);
 /*
  * Functions in loadelf.c
  *    load_elf - load an ELF user program executable into the current
