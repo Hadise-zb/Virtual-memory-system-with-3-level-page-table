@@ -77,6 +77,8 @@ struct addrspace {
         //vaddr_t as_stack;
         // new regions
         struct region *regions;
+        struct lock *lock;
+        
 #endif
 };
 
@@ -140,6 +142,16 @@ int TLB_f(int spl);
 int PTE_copy(struct addrspace *old, struct addrspace *newas);
 struct region *get_region(struct addrspace *as, vaddr_t vaddr);
 vaddr_t alloc_frame(struct addrspace *as, vaddr_t vaddr);
+
+int insert_pt(struct addrspace *as, vaddr_t vaddr, paddr_t paddr);
+paddr_t look_up_pt(struct addrspace *as, vaddr_t vaddr);
+int probe_pt(struct addrspace *as, vaddr_t vaddr);
+int update_pt(struct addrspace *as, vaddr_t vaddr, paddr_t paddr);
+int lookup_region(struct addrspace *as, vaddr_t vaddr, int faulttype);
+struct region *get_region(struct addrspace *as, vaddr_t vaddr);
+
+
+struct region *get_region2(struct addrspace *as, vaddr_t vaddr);
 /*
  * Functions in loadelf.c
  *    load_elf - load an ELF user program executable into the current

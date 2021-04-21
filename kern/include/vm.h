@@ -38,6 +38,7 @@
 
 
 #include <machine/vm.h>
+//#include <addrspace.h>
 
 /* Fault-type arguments to vm_fault() */
 #define VM_FAULT_READ        0    /* A read was attempted */
@@ -59,5 +60,14 @@ void free_kpages(vaddr_t addr);
 void vm_tlbshootdown(const struct tlbshootdown *);
 
 int vm_fault2(int faulttype, vaddr_t faultaddress);
+int vm_fault3(int faulttype, vaddr_t faultaddress);
+
+vaddr_t first_lvl_cut(vaddr_t addr);
+vaddr_t second_lvl_cut(vaddr_t addr);
+vaddr_t third_lvl_cut(vaddr_t addr);
+
+void load_tlb(uint32_t entryhi, uint32_t entrylo);
+
+
 
 #endif /* _VM_H_ */
