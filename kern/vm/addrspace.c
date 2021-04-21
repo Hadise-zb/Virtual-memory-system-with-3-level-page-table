@@ -89,7 +89,7 @@ int PTE_copy(struct addrspace *old, struct addrspace *newas) {
 			        vaddr_t new_frame_addr = alloc_frame(old, PADDR_TO_KVADDR(old->pagetable[i][j][k]));
 					//newas->pagetable[i][j][k] = KVADDR_TO_PADDR(new_frame_addr) & 0xfffff000;
 					newas->pagetable[i][j][k] = KVADDR_TO_PADDR(new_frame_addr) & PAGE_FRAME;
-					memmove((void *)new_frame_addr, (const void *)PADDR_TO_KVADDR(old->pagetable[i][j][k] & PAGE_FRAME), 64);
+					memmove((void *)new_frame_addr, (const void *)PADDR_TO_KVADDR(old->pagetable[i][j][k] & PAGE_FRAME), PAGE_SIZE);
 			    } else {
 			        newas -> pagetable[i][j][k] = 0;
 			    }
@@ -117,10 +117,13 @@ as_create(void)
 
 	if ((as->pagetable = kmalloc(sizeof(paddr_t **) * 256)) == NULL)
 	{
+	    kfree(as);
 		return NULL;
 	}
 
     for (int i = 0; i < 256; i++) as -> pagetable[i] = NULL;
+    
+    as->lock = lock_create("lock for page table");
     
 	return as;
 }
@@ -131,6 +134,10 @@ int
 as_copy(struct addrspace *old, struct addrspace **ret)
 {
     //allocates a new destination addr space
+    if (old == NULL) {
+		return EINVAL;
+	}
+	
 	struct addrspace *newas;
 
 	newas = as_create();
@@ -142,13 +149,20 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	 * Write this.
 	 */
     
+    lock_acquire(old->lock);
+    
     //adds all the same regions as source
     struct region *old_regions = old->regions;
-    struct region *temp = NULL;
+    //struct region *temp = NULL;
+    
+    struct region *new_curr = newas->regions;
+    
     while(old_regions != NULL) {
         struct region *new;
         if ((new = kmalloc(sizeof(struct region))) == NULL) {
             //kfree(new);
+            as_destroy(newas);
+            lock_release(old->lock);
             return ENOMEM;
         }
         new->region_base = old_regions->region_base;
@@ -157,14 +171,23 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 		new->prev_flags = old_regions->prev_flags;
 		//new->next = newas->regions;
 		new->next = NULL;
+		
+		/*
 		if (temp == NULL) {
 		    temp = new; 
 		} else {
 		    //newas->regions = new;
 		    temp->next = new;
 		    temp = new;
+		}*/
+		////
+		if(new_curr != NULL) {
+			new_curr->next = new;
+		} else {
+			newas->regions = new;
 		}
-				
+		new_curr = new;
+		/////	
 		old_regions = old_regions->next;
     }
     //roughly, for each mapped page in source
@@ -177,10 +200,11 @@ as_copy(struct addrspace *old, struct addrspace **ret)
     int result = PTE_copy(old, newas);
 	if ((result != 0)) {
 		as_destroy(newas);
+		lock_release(old->lock);
 		return ENOMEM;
 	}
     
-
+    lock_release(old->lock);
 	//(void)old;
 
 	*ret = newas;
@@ -197,6 +221,8 @@ as_destroy(struct addrspace *as)
 	 * Clean up as needed.
 	 */
 	if(as == NULL) return;
+
+    lock_acquire(as->lock);
 
     //Free page table
     int i = 0;
@@ -242,7 +268,8 @@ as_destroy(struct addrspace *as)
 		//kfree(curr);
 		//curr = temp;	
 	}
-	
+	lock_release(as->lock);
+	lock_destroy(as->lock);
 	kfree(as);
 }
 
@@ -307,7 +334,11 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
     if (as->regions == NULL) return EFAULT;
 
     // 
-    as->regions->flags = as->regions->prev_flags = readable | writeable | executable;
+    //as->regions->flags = as->regions->prev_flags = readable | writeable | executable;
+    if (readable) as->regions->flags |= PF_R;
+	if (writeable) as->regions->flags |= PF_W;
+	if (executable) as->regions->flags |= PF_X;
+    as->regions->prev_flags = as->regions->flags;
     as->regions->next = NULL;
     //as->regions->npages = memsize / PAGE_SIZE;
     as->regions->npages = memsize;
@@ -433,7 +464,7 @@ as_prepare_load(struct addrspace *as)
 	return 0;
 }
 
-struct region *get_region(struct addrspace *as, vaddr_t vaddr) {
+struct region *get_region2(struct addrspace *as, vaddr_t vaddr) {
     struct region *curr = as->regions;
     while (curr != NULL) {
         if (vaddr >= curr->region_base &&
@@ -470,7 +501,7 @@ as_complete_load(struct addrspace *as)
     if (as == NULL) return EFAULT; // Bad memory reference
     
     as_activate(); //Flush after loading
-	
+	lock_acquire(as->lock);
 	paddr_t ***pt = as->pagetable;
 	for(int i = 0; i < 256; i++) {
 		if (pt[i] != NULL) {
@@ -482,7 +513,7 @@ as_complete_load(struct addrspace *as)
 					        vaddr_t pt_bits = j << 18;
 					        vaddr_t pk_bits = k << 12;
 					        vaddr_t vaddr = pd_bits|pt_bits|pk_bits;
-					        struct region *region = get_region(as, vaddr);
+					        struct region *region = get_region2(as, vaddr);
 					        if (region->prev_flags == 0) {
 						        pt[i][j][k] = (pt[i][j][k] & PAGE_FRAME) |  TLBLO_VALID;
 					        }
@@ -493,7 +524,7 @@ as_complete_load(struct addrspace *as)
 			}
 		}
 	}
-	
+	lock_release(as->lock);
 	struct region *curr = as->regions;
 	while(curr != NULL) {
 		curr->flags = curr->prev_flags;
@@ -518,7 +549,7 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 	
 	int output;
 	
-	if ((output = as_define_region(as, USERSTACK - 16 * 256, 16 * 256, 1, 1, 0)) != 0) {
+	if ((output = as_define_region(as, USERSTACK - 16 * PAGE_SIZE, 16 * PAGE_SIZE, 1, 1, 0)) != 0) {
 	    return output;
 	}
 
