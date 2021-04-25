@@ -137,11 +137,6 @@ struct tlbshootdown {
 
 #define TLBSHOOTDOWN_MAX 16
 
-void load_tlb(uint32_t entryhi, uint32_t entrylo);
-uint32_t first_lvl_cut(vaddr_t addr);
-uint32_t second_lvl_cut(vaddr_t addr);
-uint32_t third_lvl_cut(vaddr_t addr);
-
 #define EMPTY 0
 
 #endif /* _MIPS_VM_H_ */

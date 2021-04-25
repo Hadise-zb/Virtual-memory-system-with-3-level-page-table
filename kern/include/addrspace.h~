@@ -1,17 +1,52 @@
+/*
+ * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
+ *	The President and Fellows of Harvard College.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
 #ifndef _ADDRSPACE_H_
 #define _ADDRSPACE_H_
-#define PAGETABLE_SIZE 1024
+
 /*
  * Address space structure and operations.
  */
 
 
 #include <vm.h>
-#include <synch.h>
 #include "opt-dumbvm.h"
 
 struct vnode;
 
+// the struct of region define here
+typedef struct region {
+        vaddr_t region_size; // the size of the region
+        vaddr_t base_size;   // the base size of region
+        uint32_t flags; 
+        struct region *next; 
+} region;
 
 /*
  * Address space - data structure associated with the virtual memory
@@ -30,43 +65,21 @@ struct addrspace {
         size_t as_npages2;
         paddr_t as_stackpbase;
 #else
-        /* Put stuff here for your VM system */
-        /* only needs region for addrspace */
-        struct region *regions;
-	paddr_t ***pagetable;
-	struct lock *pt_lock;
+        // 3 level page table
+        paddr_t ***pagetable;
+
+        //regions linked list
+        struct region* regions;
+        
+        uint32_t region_flag;
 
 #endif
 };
 
-/*
- * Regions are code, data, etc.. derived from the ELF file, in KUSEG
- * https://piazza.com/class/jrr04q7mah621s?cid=507
- */
+#define first_level 256
+#define second_level 64
+#define third_level 64
 
-struct region {
-	vaddr_t base_addr;
-	size_t memsize;
-	/* Permissions */
-	int readable;
-	int writeable;
-        int old_writeable;
-	int executable;
-	struct region *next;
-};
-
-
-struct region * region_create(vaddr_t vaddr, size_t memsize, int readable, int writeable, int executable);
-void region_insert(struct addrspace *as, struct region *new);
-void region_copy(struct region *old, struct region *new);
-int region_valid(struct addrspace *as, vaddr_t vaddr, size_t memsize);
-struct region *get_region(struct addrspace *as, vaddr_t vaddr);
-void regions_cleanup(struct addrspace *as);
-int pt_copy(struct addrspace *old_as, paddr_t **old_pt, paddr_t **new_pt);
-
-int PTE_copy(struct addrspace *old, struct addrspace *newas);
-int TLB_f(int spl);
-struct region *get_region2(struct addrspace *as, vaddr_t vaddr);
 /*
  * Functions in addrspace.c:
  *
@@ -122,8 +135,13 @@ int               as_define_region(struct addrspace *as,
 int               as_prepare_load(struct addrspace *as);
 int               as_complete_load(struct addrspace *as);
 int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
-
-
+int PTE_copy(struct addrspace *old, struct addrspace *newas);
+struct region *get_region(struct addrspace *as, vaddr_t vaddress);
+void tlb_update(void);
+void initial_region(region *new_region, int readable, int writeable, int executable, vaddr_t vaddr, size_t memsize);
+int fault_check(int faulttype);
+struct region *region_search(struct addrspace *as, vaddr_t vaddress);
+void TLB_load(uint32_t elo, uint32_t ehi);
 /*
  * Functions in loadelf.c
  *    load_elf - load an ELF user program executable into the current
@@ -133,13 +151,5 @@ int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 
 int load_elf(struct vnode *v, vaddr_t *entrypoint);
 
-/* vm.c functions */
-
-int lookup_region(struct addrspace *as, vaddr_t vaddr, int faulttype);
-int insert_pt(struct addrspace *as, vaddr_t vaddr, paddr_t paddr);
-paddr_t look_up_pt(struct addrspace *as, vaddr_t vaddr);
-int probe_pt(struct addrspace *as, vaddr_t vaddr);
-int update_pt(struct addrspace *as, vaddr_t addr, paddr_t paddr);
-vaddr_t alloc_frame(struct addrspace *as, vaddr_t vaddr);
 
 #endif /* _ADDRSPACE_H_ */

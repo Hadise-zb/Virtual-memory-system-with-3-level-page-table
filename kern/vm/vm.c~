@@ -3,272 +3,165 @@
 #include <lib.h>
 #include <thread.h>
 #include <addrspace.h>
-#include <synch.h>
 #include <vm.h>
-#include <proc.h>
-#include <current.h>
 #include <machine/tlb.h>
+#include <current.h>
+
+
+#include <proc.h>
+#include <elf.h>
 #include <spl.h>
-/***************************************
- * Page Table Operation Functions
- ***************************************/
-/* Insert Page Table entry
- * 1) Convert
- * 2) See if it is in a valid address space
- * 3) Link the Page Table Lvl 1 has reference to lvl 2
- * 4) Lvl 2 has ref to frame number
- * Assumed that paddr is already allocated a frame.
- */
-int insert_pt(struct addrspace *as, vaddr_t vaddr, paddr_t paddr)
-{
-    uint32_t first_index = first_lvl_cut(vaddr);
-    uint32_t second_index = second_lvl_cut(vaddr);
-    uint32_t third_index = third_lvl_cut(vaddr);
-    
-    if (first_index >= 256 || second_index >= 64 || third_index >= 64) {
-        return EFAULT;
-    }
+/* Place your page table functions here */
 
-    lock_acquire(as->pt_lock);
+#define FLC(addr) ((addr) >> (24))
+#define SLC(addr) (((addr) << (8)) >> (26))
+#define TLC(addr) (((addr) << (14)) >> (26))
 
-    if (as->pagetable[first_index] == NULL) {
-        as->pagetable[first_index] = kmalloc(PAGE_SIZE);
-        if (as->pagetable[first_index] == NULL) {
-            lock_release(as->pt_lock);
-            return ENOMEM;
-        }
-        as->pagetable[first_index][second_index] = kmalloc(4 * 64);
-        if (as->pagetable[first_index][second_index] == NULL) {
-            //kfree(as->pagetable[first_index]);
-            lock_release(as->pt_lock);
-            return ENOMEM;
-        }
-        for(int i = 0; i < 64; i++) {
-            as->pagetable[first_index][second_index][i] = 0;
-        }
-    } else if (as->pagetable[first_index] != NULL && as->pagetable[first_index][second_index] == NULL) {
-        as->pagetable[first_index][second_index] = kmalloc(4 * 64);
-        if (as->pagetable[first_index][second_index] == NULL) {
-            //kfree(as->pagetable[first_index]);
-            lock_release(as->pt_lock);
-            return ENOMEM;
-        }
-        for (int i = 0; i < 64; i++) {
-            as->pagetable[first_index][second_index][i] = 0;
-        }
-    } else {
-        // Check if there is something in page already
-        if (as->pagetable[first_index][second_index][third_index] != 0) {
-            //kfree(as->pagetable[first_index][second_index]);
-            //kfree(as->pagetable[first_index]);
-            lock_release(as->pt_lock);
-            return EFAULT;
-        }
-    }
+// bool
+#define FALSE 0
+#define TRUE 1
 
-    as->pagetable[first_index][second_index][third_index] = paddr;
-    lock_release(as->pt_lock);
+// check authority
+#define IFR(flag) ((((flag) & (PF_R)) == (PF_R)) ? (TRUE) : (FALSE))
+#define IFW(flag) ((((flag) & (PF_W)) == (PF_W)) ? (TRUE) : (FALSE))
+#define IFX(flag) ((((flag) & (PF_X)) == (PF_X)) ? (TRUE) : (FALSE))
 
-    return 0;
-}
-
-/* Look up Page Table entry
- * 1) Convert
- * 2) See if it is in a valid address space
- *      - FAILS return 0
- *      - SUCCESS return Frame No.
- */
-paddr_t look_up_pt(struct addrspace *as, vaddr_t vaddr)
-{
-    //KASSERT(0);
-    uint32_t first_index = first_lvl_cut(vaddr);
-    uint32_t second_index = second_lvl_cut(vaddr);
-    uint32_t third_index = third_lvl_cut(vaddr);
-
-    if (probe_pt(as, vaddr) != 0) {
-        return 0;
-    }
-
-    first_index = first_lvl_cut(vaddr);
-    second_index = second_lvl_cut(vaddr);
-    third_index = third_lvl_cut(vaddr);
-
-    return as->pagetable[first_index][second_index][third_index];
-}
-/*
- * look for an entry matching the virtual page
- * Returns the 0, or a negative number if no matching entry
- * was found. 
- */
-int probe_pt(struct addrspace *as, vaddr_t vaddr) {
-    uint32_t first_index = first_lvl_cut(vaddr);
-    uint32_t second_index = second_lvl_cut(vaddr);
-    uint32_t third_index = third_lvl_cut(vaddr);
-
-    if (first_index >= 256 || second_index >= 64 || third_index >= 64) {
-        return -1;
-    }
-    //lock_acquire(as->pt_lock);
-    if (as->pagetable == NULL) {
-        //lock_release(as->pt_lock);
-        return -1;
-    }
-    if (as->pagetable[first_index] == NULL) {
-        //lock_release(as->pt_lock);
-        return -1;
-    }
-
-    if (as->pagetable[first_index][second_index] == NULL) {
-        //lock_release(as->pt_lock);
-        return -1;
-    }
-
-    if (as->pagetable[first_index][second_index][third_index] == 0) {
-        //lock_release(as->pt_lock);
-        return -1;
-    }
-
-    //lock_release(as->pt_lock);
-    
-    
-    return 0;
-}
-
-/* Update Page Table Entry
- * 1) Convert
- * 2) Look up Page Table entry
- *      - FAILS return -1
- * 3) Update table
- */
-int update_pt(struct addrspace *as, vaddr_t vaddr, paddr_t paddr)
-{
-    KASSERT(0);
-    uint32_t result = probe_pt(as, vaddr);
-    if (result) return result;
-
-    uint32_t first_index = first_lvl_cut(vaddr);
-    uint32_t second_index = second_lvl_cut(vaddr);
-    uint32_t third_index = third_lvl_cut(vaddr);
-
-    as->pagetable[first_index][second_index][third_index] = paddr;
-
-    return 0;
-}
-
+/*  rwx = DV
+    rw- = DV
+    r-x = -V
+    r-- = -V
+    -wx = DV
+    -w- = DV
+    --x = -V
+    --- = --   */
+#define IFD(flag) ((IFW(flag)) ? (TLBLO_DIRTY) : (0))
+#define IFV(flag) (((IFR(flag)) || (IFW(flag)) || (IFX(flag))) ? (TLBLO_VALID) : (0))
 
 void vm_bootstrap(void)
 {
-    /* Initialise VM sub-system.  You probably want to initialise your
-       frame table here as well.
-       NOTE: Frame Table already INIT and is already been done, no need to worry anything about it
-       https://piazza.com/class/jrr04q7mah621s?cid=491
-       Basically can do nothing???
-    */
+    /* Initialise any global components of your VM sub-system here.  
+     *  
+     * You may or may not need to add anything here depending what's
+     * provided or required by the assignment spec.
+     */
 }
 
-
-int vm_fault(int faulttype, vaddr_t faultaddress)
-{
-    /*
-     * vm_fault is called when there is a page fault
-     * Logic is define as following:
-     * 1) check if address space is read only
-     *      - YES: EFAULT
-     *      - NO: move to next step
-     * 2) Look up Page Table, check if PTE exist for this address.
-     *      - YES: load to TLB and solve this fault (exit)
-     *      - NO: move to next step
-     * 3) Look the address space's region. check if it is a valid region.
-     *      - YES: move to next step
-     *      - NO: EFAULT
-     * 4) Allocate Frame, Zero-filled, Insert PTE and then load TLB
-     * Note: faultaddress is a virtual address, thus 10 bits = pd, 20 bits = pt
-     */
-
-    switch (faulttype)
-    {
-        case VM_FAULT_READONLY:
-            return EFAULT;
-        case VM_FAULT_WRITE:
-        case VM_FAULT_READ:
-            break;
-        default:
-            return EINVAL; /* Invalid Arg */
-    }
-    if (curproc == NULL) {
-        /*
-         * No process. This is probably a kernel fault early
-         * in boot. Return EFAULT so as to panic instead of
-         * getting into an infinite faulting loop.
-         */
+// check faulttype
+int fault_check(int faulttype) {
+    if (faulttype == VM_FAULT_READONLY) {
         return EFAULT;
+    } else if (faulttype == VM_FAULT_WRITE || faulttype == VM_FAULT_READ) {
+        return 0;
+    } else {
+        return EINVAL;
     }
+}
 
-
-
-    struct addrspace *as = proc_getas(); /* get curproc's as to access our pt */
-    if (as == NULL) {
-        /*
-         * No address space set up. This is probably also a
-         * kernel fault early in boot.
-         */
-        return EFAULT;
-    }
-    paddr_t ***pagetable = as->pagetable;
-    if (pagetable == NULL) return EFAULT;
-    uint32_t first_index = first_lvl_cut(faultaddress);
-    uint32_t second_index = second_lvl_cut(faultaddress);
-    uint32_t third_index = third_lvl_cut(faultaddress);
-
-
-
-
-    /* Look up Page Table */
-    if (probe_pt(as, faultaddress) == 0)
-    {
-        /* get region and check bits */
-        if (lookup_region(as, faultaddress, faulttype) == 0) {
-            /* Load into TLB */
-            load_tlb(faultaddress & PAGE_FRAME, pagetable[first_index][second_index][third_index]);
-            return 0;
+// search a region matched
+struct region *region_search(struct addrspace *as, vaddr_t vaddress) {
+    struct region *curr = as->regions;
+    while (curr != NULL) {
+        if (vaddress >= curr->base_size &&
+            (vaddress < (curr->base_size + curr->region_size))) {
+            return curr;
         }
-        return EFAULT;
+        curr = curr->next;
     }
+    return curr;
+}
 
+// load tlb
+void TLB_load(uint32_t elo, uint32_t ehi) {
+    int spl;
+    spl = splhigh();
+    tlb_random(ehi, elo);
+    splx(spl);
+}
 
-    /* Check for valid Region
-     * This means that we have to check whether its accessing a page that
-     * should exist but have not been accessed yet
-     */
-    int result = lookup_region(as, faultaddress, faulttype); 
-    if(result) {
+int
+vm_fault(int faulttype, vaddr_t faultaddress)
+{
+    // faulty type check
+    int result = fault_check(faulttype);
+    if (result) {
         return result;
     }
 
-    /* Found a region that is within process's region*/
-    vaddr_t newVaddr = alloc_frame(as, faultaddress);
-    //kprintf("judge newVaddr\n");
-    if (newVaddr == 0) return ENOMEM;
-    paddr_t paddr = KVADDR_TO_PADDR(newVaddr) & PAGE_FRAME;
-    struct region *region = get_region(as, faultaddress);
-    /* insert into PTE */
-    if (region->writeable != 0) {
-        paddr = paddr | TLBLO_DIRTY;
+    // initial
+    if (curproc == NULL) return EFAULT;
+
+    struct addrspace *as = proc_getas();
+    if (as == NULL) return EFAULT;
+
+    if (faultaddress >= USERSTACK) return EFAULT;
+
+    struct region *valid_region = region_search(as, faultaddress);
+    if (valid_region == NULL) {
+        return EFAULT;
     }
 
-    result = insert_pt(as, faultaddress, paddr | TLBLO_VALID);
-    if (result != 0) {
-        return ENOMEM;
-    }
-    /* Load TLB*/
-    load_tlb(faultaddress & PAGE_FRAME, pagetable[first_index][second_index][third_index]);
-    return 0;         /* return sucessfully */
+    // cut address
+    vaddr_t first = FLC(faultaddress);
+    vaddr_t second = SLC(faultaddress);
+    vaddr_t third = TLC(faultaddress);
 
+    // initial D and V
+    uint32_t is_dirty = 0;
+    uint32_t is_valid = 0;
+
+    is_dirty |= IFD(valid_region->flags);
+    is_valid |= IFV(valid_region->flags);
+
+    // case lvl1 not exits
+    if (as->pagetable[first] == NULL) {
+        as->pagetable[first] = kmalloc(second_level * sizeof(paddr_t *));
+
+        int i = 0;
+        while (i < second_level) {
+            as->pagetable[first][i] = NULL;
+            i++;
+        }
+        as->pagetable[first][second] = kmalloc(third_level * sizeof(paddr_t));
+        // zero-fill
+        i = 0;
+        while (i < third_level) {
+            as->pagetable[first][second][i] = 0;
+            i++;
+        }
+    }
+    // case lvl2 not exits
+    else if (as->pagetable[first] != NULL && as->pagetable[first][second] == NULL) {
+        as->pagetable[first][second] = kmalloc(third_level * sizeof(paddr_t));
+        // zero-fill
+        int i = 0;
+        while (i < third_level) {
+            as->pagetable[first][second][i] = 0;
+            i++;
+        }
+    }
+
+    // pte write in
+    if (as->pagetable[first][second][third] == 0) {
+        // allocate frame
+        vaddr_t newVBase = alloc_kpages(1);
+        bzero((void *)newVBase, (size_t)PAGE_SIZE);
+        paddr_t newPBase = KVADDR_TO_PADDR(newVBase);
+        // insert pagetableE
+        as->pagetable[first][second][third] = (newPBase & PAGE_FRAME) | is_dirty | is_valid;
+    }
+
+    uint32_t entrylo = as->pagetable[first][second][third] | as->region_flag;
+    uint32_t entryhi = faultaddress & PAGE_FRAME;
+
+    // load tlb
+    TLB_load(entrylo, entryhi);
+    
+    // sucess
+    return 0;
 }
 
 /*
- *
- * SMP-specific functions.  Unused in our configuration.
+ * SMP-specific functions.  Unused in our UNSW configuration.
  */
 
 void
@@ -276,103 +169,4 @@ vm_tlbshootdown(const struct tlbshootdown *ts)
 {
 	(void)ts;
 	panic("vm tried to do tlb shootdown?!\n");
-}
-
-/***************************************
- * Helper Functions
- ***************************************/
-/* Save an entry into TLB */
-void load_tlb(uint32_t entryhi, uint32_t entrylo)
-{
-    int sql = splhigh();
-    tlb_random(entryhi, entrylo);
-    splx(sql);
-}
-
-/*
- * Checks whether a region is valid
- * Iterate through all current process as's region and check whether its
- * within any of those regions.
- */
-int lookup_region(struct addrspace *as, vaddr_t vaddr, int faulttype)
-{
-    struct region *curr = as->regions;
-    while(curr != NULL) {
-        if (vaddr >= curr->base_addr &&
-            (vaddr < (curr->base_addr + curr->memsize))) {
-            break;
-        }
-        curr = curr->next;
-    }
-
-    if (curr == NULL)     return EFAULT; /* Cant find region thus return error */
-
-    switch (faulttype)
-    {
-        case VM_FAULT_WRITE:
-            if (curr->writeable == 0) return EPERM;
-            break;
-        case VM_FAULT_READ:
-            if (curr->readable == 0) return EPERM;
-            break;
-        default:
-            return EINVAL; /* Invalid Arg */
-    }
-    return 0;
-}
-
-struct region *get_region(struct addrspace *as, vaddr_t vaddr) {
-    struct region *curr = as->regions;
-    while (curr != NULL) {
-        if (vaddr >= curr->base_addr &&
-            (vaddr < (curr->base_addr + curr->memsize))) {
-            return curr;
-        }
-        curr = curr->next;
-    }
-    return NULL;
-}
-
-vaddr_t first_lvl_cut(vaddr_t addr) {
-    //return KVADDR_TO_PADDR(addr) >> 22;
-    return addr >> 24;
-}
-
-vaddr_t second_lvl_cut(vaddr_t addr) {
-    //return (KVADDR_TO_PADDR(addr) << 10) >> 22;
-    return (addr << 8) >> 26;
-}
-
-vaddr_t third_lvl_cut(vaddr_t addr) {
-    return (addr << 14) >> 26;
-}
-
-vaddr_t alloc_frame(struct addrspace *as, vaddr_t vaddr) {
-	/*  Allocate Frame for this region  */
-    //kprintf("alloc_debug\n");
-    (void)as;
-    vaddr = vaddr;
-    //kprintf("alloc_kpage_before\n");
-	//struct region *region = get_region(as, vaddr);
-	//size_t regionSize = region->memsize;
-	/* calculate how many frame number we need */
-	//unsigned int frameNeeded = regionSize / PAGE_SIZE;
-	//vaddr_t newVaddr = alloc_kpages(frameNeeded);
-	//kprintf("OhOh\n");
-    vaddr_t newVaddr = alloc_kpages(1);
-    //kprintf("alloc_kpage_after\n");
-	if (newVaddr == 0) return 0;
-	/* zero out the frame */
-	//bzero((void *) newVaddr, regionSize);
-	//kprintf("%d\n", (int)newVaddr);
-	//kprintf("bezero_before\n");
-    //bzero((void *) newVaddr, PAGE_SIZE);
-    long *lb = (long *)newVaddr;
-    for (int i = 0; i < PAGE_SIZE; i++) {
-        //bzero((void *) newVaddr, PAGE_SIZE);
-        lb[i] = 0;
-    }
-    
-    //kprintf("bezero_after\n");
-	return newVaddr;
 }
